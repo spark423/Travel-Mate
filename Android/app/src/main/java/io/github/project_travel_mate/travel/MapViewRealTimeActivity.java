@@ -1,15 +1,21 @@
 package io.github.project_travel_mate.travel;
 
+import java.util.Map;
+import java.util.HashMap;
+import org.json.JSONObject;
+
 import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.database.DataSetObserver;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.AsyncTask;
 import android.preference.PreferenceManager;
 import android.support.design.widget.Snackbar;
 import android.support.v4.content.ContextCompat;
@@ -35,7 +41,13 @@ import org.osmdroid.views.MapView;
 import org.osmdroid.views.overlay.Marker;
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -52,9 +64,108 @@ import okhttp3.Response;
 import utils.GPSTracker;
 import utils.TravelmateSnackbars;
 
+
+
+
 import static utils.Constants.API_LINK_V2;
 import static utils.Constants.HERE_API_MODES;
 import static utils.Constants.USER_TOKEN;
+
+class ObservableMap<K, V>  {
+    private DataSetObserver mObserver;
+    private HashMap<K, V> mMap;
+    /**
+     * Initiates ObserverableMap object
+     *
+     * @param observer observer that keeps track of any put activities
+     * @param map the map that stores the key, value info
+     */
+    public ObservableMap(DataSetObserver observer, HashMap<K, V> map) {
+        mObserver = observer;
+        mMap = map;
+    }
+    /**
+     * Updates mMap and notifies observer of data change.
+     *
+     * @param k key to be inserted.
+     * @param v value to be inserted.
+     */
+
+    public void put(K key, V value) {
+        mMap.put(key, value);
+        mObserver.onChanged();
+    }
+
+    /**
+     * Updates mMap and notifies observer of data change.
+     *
+     * @return  Returns hasn map pointed to by mMap.
+     */
+
+    public HashMap<K, V> getMap() {
+        return mMap;
+    }
+}
+
+class GetGMAPTask extends AsyncTask<String, Void, String> {
+
+
+
+    private ObservableMap<String, String> mMap;
+
+    public GetGMAPTask(ObservableMap<String, String> map) {
+        mMap = map;
+    }
+
+    /**
+     * Calls backend server to retrieve transit information
+     * @param strings set of strings that represent current longitude and latitude as well as the name of destination
+     * @return
+     */
+    @Override
+    protected String doInBackground(String... strings) {
+        String line;
+        HttpURLConnection httpURLConnection = null;
+        BufferedReader bufferedReader;
+        StringBuilder stringBuilder = new StringBuilder();
+
+        try {
+            URL u = new URL("https://cs395.herokuapp.com/latitude/" + strings[0]  + "/longitude/" + strings[1] + "/destination/" + strings[2]);
+            httpURLConnection = (HttpURLConnection) u.openConnection();
+            httpURLConnection.setRequestMethod("GET");
+            bufferedReader = new BufferedReader(new InputStreamReader(httpURLConnection.getInputStream()));
+            while ((line = bufferedReader.readLine()) != null) {
+                stringBuilder.append(line);
+            }
+        } catch (MalformedURLException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            httpURLConnection.disconnect();
+        }
+        return stringBuilder.toString();
+    }
+    /**
+     * Parses response body and puts it into an observable map in key, value pairs.
+     * @param jsonString response body from background operation in string form.
+     * @return
+     */
+    @Override
+    protected void onPostExecute(String jsonString) {
+        try {
+            JSONObject jsonObj = new JSONObject(jsonString);
+            boolean success = jsonObj.getBoolean("success");
+            boolean transit = jsonObj.getBoolean("transit");
+            if (success && transit) {
+                mMap.put("duration", jsonObj.getString("duration"));
+                mMap.put("departure", jsonObj.getString("departure"));
+            }
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+    }
+}
 
 /**
  * Show markers on map around user's current location
@@ -326,13 +437,18 @@ public class MapViewRealTimeActivity extends AppCompatActivity implements
                 break;
             }
         }
-
+        TextView departure = MapViewRealTimeActivity.this.findViewById(R.id.item_departure);
+        TextView duration = MapViewRealTimeActivity.this.findViewById(R.id.item_duration);
         TextView title = MapViewRealTimeActivity.this.findViewById(R.id.item_title);
         TextView description = MapViewRealTimeActivity.this.findViewById(R.id.item_description);
-        final Button calls, book;
+        departure.setVisibility(View.GONE);
+        duration.setVisibility(View.GONE);
+        final Button calls, book, transit, directions;
         calls = MapViewRealTimeActivity.this.findViewById(R.id.call);
         book = MapViewRealTimeActivity.this.findViewById(R.id.book);
-
+        transit = MapViewRealTimeActivity.this.findViewById(R.id.transit);
+        directions = MapViewRealTimeActivity.this.findViewById(R.id.directions);
+        directions.setVisibility(View.GONE);
         title.setText(mMapItems.get(mIndex).getName());
 
         description.setText(android.text.Html.fromHtml(mMapItems.get(mIndex).getAddress()).toString());
@@ -352,6 +468,35 @@ public class MapViewRealTimeActivity extends AppCompatActivity implements
                 TravelmateSnackbars.createSnackBar(findViewById(R.id.map_real_time),
                         R.string.no_activity_for_browser, Snackbar.LENGTH_LONG).show();
             }
+        });
+        String destination = mMapItems.get(mIndex).getName();
+        StringBuilder parsedDestination = new StringBuilder(destination);
+        transit.setOnClickListener(view -> {
+            for (int i = 0; i < destination.length(); i++) {
+                if (destination.charAt(i) == ' ' || destination.charAt(i) == '&') {
+                    parsedDestination.setCharAt(i, '+');
+                }
+            }
+            HashMap<String, String> hm = new HashMap<String, String>();
+            ObservableMap<String, String> transitInfo = new ObservableMap<String, String>(new DataSetObserver() {
+                @Override
+                public void onChanged() {
+                    if (!hm.isEmpty()) {
+                        departure.setText(hm.get("departure"));
+                        duration.setText(hm.get("duration"));
+                        departure.setVisibility(View.VISIBLE);
+                        duration.setVisibility(View.VISIBLE);
+                    }
+                }
+            }, hm);
+            GetGMAPTask myTask = new GetGMAPTask(transitInfo);
+            myTask.execute(mCurlat, mCurlon, parsedDestination.toString());
+            directions.setVisibility(View.VISIBLE);
+        });
+        directions.setOnClickListener(view -> {
+            String searchStr = "geo:" + mCurlat + ","  + mCurlon + "?q=" + parsedDestination;
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(searchStr));
+            MapViewRealTimeActivity.this.startActivity(intent);
         });
     }
 
