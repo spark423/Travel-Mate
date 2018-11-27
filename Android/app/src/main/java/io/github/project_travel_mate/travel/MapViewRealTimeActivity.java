@@ -482,8 +482,10 @@ public class MapViewRealTimeActivity extends AppCompatActivity implements
                 @Override
                 public void onChanged() {
                     if (!hm.isEmpty()) {
-                        departure.setText("Departing Stop: " + hm.get("departure"));
-                        duration.setText("Total duration: " + hm.get("duration"));
+                        String departureText = "Departing Stop: " + hm.get("departure");
+                        String durationText = "Total duration: " + hm.get("duration");
+                        departure.setText(departureText);
+                        duration.setText(durationText);
                         departure.setVisibility(View.VISIBLE);
                         duration.setVisibility(View.VISIBLE);
                     }
